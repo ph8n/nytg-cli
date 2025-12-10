@@ -18,6 +18,20 @@ pub fn build(b: *std.Build) void {
     });
     exe_mod.addImport("vaxis", vaxis.module("vaxis"));
 
+    // Add zig-sqlite
+    const sqlite = b.dependency("sqlite", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    exe_mod.addImport("sqlite", sqlite.module("sqlite"));
+
+    // Add zig-curl
+    const curl = b.dependency("curl", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    exe_mod.addImport("curl", curl.module("curl"));
+
     // Create executable
     const exe = b.addExecutable(.{
         .name = "nytg_cli",

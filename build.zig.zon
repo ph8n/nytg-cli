@@ -36,6 +36,14 @@
             .url = "git+https://github.com/rockorager/libvaxis.git#5915f33c1a7a184d3fb2aa39f087c1e6864a4308",
             .hash = "vaxis-0.5.1-BWNV_GMyCQBtxcEkSAEb_EXbm8A24FWJFC7fXiWUVx9Y",
         },
+        .sqlite = .{
+            .url = "git+https://github.com/vrischmann/zig-sqlite#0b75ba276d34de3141ec1697e3ef7c836d7b38e7",
+            .hash = "sqlite-3.48.0-F2R_a8eODgD9X8XjvWlZ1K7C-tDuHae4FuShM2N-yIT2",
+        },
+        .curl = .{
+            .url = "git+https://github.com/jiacai2050/zig-curl#92db14ccdf58ee853c31564f3bdca265e3fc7dfe",
+            .hash = "curl-0.3.2-P4tT4XHoAAAN71krRGKGqMAi1tlwRi6dY5t8dDJWowJp",
+        },
     },
     .paths = .{
         "build.zig",
