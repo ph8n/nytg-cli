@@ -1,10 +1,13 @@
 const std = @import("std");
 const vaxis = @import("vaxis");
+const sqlite = @import("sqlite");
 
 const api_client = @import("../../api/client.zig");
+const api_models = @import("../../api/models.zig");
 const colors = @import("../../ui/colors.zig");
 const already_played = @import("../../ui/already_played.zig");
 const app_event = @import("../../ui/event.zig");
+const fetch_error = @import("../../ui/fetch_error.zig");
 const ui_keys = @import("../../ui/keys.zig");
 const date = @import("../../utils/date.zig");
 const storage_db = @import("../../storage/db.zig");
@@ -18,6 +21,12 @@ pub const Exit = enum {
 pub const Mode = enum {
     daily,
     unlimited,
+};
+
+pub const Dependencies = struct {
+    fetch_daily_puzzle: *const fn (allocator: std.mem.Allocator, puzzle_date: []const u8) anyerror!std.json.Parsed(api_models.WordleData) = defaultFetchDailyPuzzle,
+    save_daily_result: *const fn (db: *sqlite.Db, result: storage_stats.WordleResult) anyerror!void = defaultSaveDailyResult,
+    save_unlimited_result: *const fn (db: *sqlite.Db, result: storage_stats.WordleUnlimitedResult) anyerror!void = defaultSaveUnlimitedResult,
 };
 
 const Status = enum(u2) {
@@ -41,6 +50,20 @@ pub fn run(
     mode: Mode,
     dev_mode: bool,
     direct_launch: bool,
+) !Exit {
+    return runWithDeps(allocator, tty, vx, loop, storage, mode, dev_mode, direct_launch, .{});
+}
+
+pub fn runWithDeps(
+    allocator: std.mem.Allocator,
+    tty: *vaxis.Tty,
+    vx: *vaxis.Vaxis,
+    loop: *vaxis.Loop(app_event.Event),
+    storage: *storage_db.Storage,
+    mode: Mode,
+    dev_mode: bool,
+    direct_launch: bool,
+    deps: Dependencies,
 ) !Exit {
     var allowed = try AllowedWords.init(allocator);
     defer allowed.deinit(allocator);
@@ -74,7 +97,9 @@ pub fn run(
             }
         }
 
-        var parsed = try api_client.fetchWordle(allocator, today[0..]);
+        var parsed = deps.fetch_daily_puzzle(allocator, today[0..]) catch |err| {
+            return showLoadError(allocator, tty, vx, loop, direct_launch, "Wordle", err);
+        };
         defer parsed.deinit();
 
         state.solution = try normalizeSolution(parsed.value.solution);
@@ -156,7 +181,7 @@ pub fn run(
 
                     if (state.phase == .finished) {
                         if (mode == .daily) {
-                            try storage_stats.saveWordleResult(&storage.db, .{
+                            try deps.save_daily_result(&storage.db, .{
                                 .puzzle_date = today[0..],
                                 .puzzle_id = puzzle_id,
                                 .won = state.won,
@@ -164,7 +189,7 @@ pub fn run(
                                 .played_at = std.time.timestamp(),
                             });
                         } else {
-                            try storage_stats.saveWordleUnlimitedResult(&storage.db, .{
+                            try deps.save_unlimited_result(&storage.db, .{
                                 .won = state.won,
                                 .guesses = if (state.won) @intCast(state.row + 1) else 0,
                                 .played_at = std.time.timestamp(),
@@ -187,6 +212,48 @@ pub fn run(
             },
         }
     }
+}
+
+fn defaultFetchDailyPuzzle(
+    allocator: std.mem.Allocator,
+    puzzle_date: []const u8,
+) anyerror!std.json.Parsed(api_models.WordleData) {
+    return api_client.fetchWordle(allocator, puzzle_date);
+}
+
+fn defaultSaveDailyResult(db: *sqlite.Db, result: storage_stats.WordleResult) anyerror!void {
+    return storage_stats.saveWordleResult(db, result);
+}
+
+fn defaultSaveUnlimitedResult(db: *sqlite.Db, result: storage_stats.WordleUnlimitedResult) anyerror!void {
+    return storage_stats.saveWordleUnlimitedResult(db, result);
+}
+
+fn showLoadError(
+    allocator: std.mem.Allocator,
+    tty: *vaxis.Tty,
+    vx: *vaxis.Vaxis,
+    loop: *vaxis.Loop(app_event.Event),
+    direct_launch: bool,
+    title: []const u8,
+    err: anyerror,
+) !Exit {
+    const detail = try std.fmt.allocPrint(
+        allocator,
+        "Could not load puzzle ({s}). Check network and try again.",
+        .{@errorName(err)},
+    );
+    defer allocator.free(detail);
+
+    return switch (try fetch_error.run(allocator, tty, vx, loop, .{
+        .title = title,
+        .headline = "Unable to load today's puzzle",
+        .detail = detail,
+        .direct_launch = direct_launch,
+    })) {
+        .quit => .quit,
+        .back_to_menu => .back_to_menu,
+    };
 }
 
 fn isEnterKey(k: vaxis.Key) bool {

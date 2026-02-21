@@ -3,9 +3,11 @@ const vaxis = @import("vaxis");
 const sqlite = @import("sqlite");
 
 const api_client = @import("../../api/client.zig");
+const api_models = @import("../../api/models.zig");
 const colors = @import("../../ui/colors.zig");
 const already_played = @import("../../ui/already_played.zig");
 const app_event = @import("../../ui/event.zig");
+const fetch_error = @import("../../ui/fetch_error.zig");
 const ui_keys = @import("../../ui/keys.zig");
 const date = @import("../../utils/date.zig");
 const storage_db = @import("../../storage/db.zig");
@@ -14,6 +16,11 @@ const storage_stats = @import("../../storage/stats.zig");
 pub const Exit = enum {
     back_to_menu,
     quit,
+};
+
+pub const Dependencies = struct {
+    fetch_daily_puzzle: *const fn (allocator: std.mem.Allocator, puzzle_date: []const u8) anyerror!std.json.Parsed(api_models.ConnectionsData) = defaultFetchDailyPuzzle,
+    save_result: *const fn (db: *sqlite.Db, result: storage_stats.ConnectionsResult) anyerror!void = defaultSaveResult,
 };
 
 const Difficulty = enum(u2) {
@@ -131,6 +138,19 @@ pub fn run(
     dev_mode: bool,
     direct_launch: bool,
 ) !Exit {
+    return runWithDeps(allocator, tty, vx, loop, storage, dev_mode, direct_launch, .{});
+}
+
+pub fn runWithDeps(
+    allocator: std.mem.Allocator,
+    tty: *vaxis.Tty,
+    vx: *vaxis.Vaxis,
+    loop: *vaxis.Loop(app_event.Event),
+    storage: *storage_db.Storage,
+    dev_mode: bool,
+    direct_launch: bool,
+    deps: Dependencies,
+) !Exit {
     var state: GameState = .{};
     defer state.deinit(allocator);
 
@@ -157,7 +177,9 @@ pub fn run(
         };
     }
 
-    var parsed = try api_client.fetchConnections(allocator, today);
+    var parsed = deps.fetch_daily_puzzle(allocator, today) catch |err| {
+        return showLoadError(allocator, tty, vx, loop, direct_launch, "Connections", err);
+    };
     defer parsed.deinit();
 
     const puzzle_id = parsed.value.id;
@@ -176,14 +198,14 @@ pub fn run(
                 vx.setMouseShape(.default);
             },
             .mouse => |m| {
-                handleMouse(allocator, vx, &state, m, puzzle_id, today, &storage.db) catch |err| switch (err) {
+                handleMouse(allocator, vx, &state, m, puzzle_id, today, &storage.db, deps.save_result) catch |err| switch (err) {
                     error.Quit => return .quit,
                     error.BackToMenu => return .back_to_menu,
                     else => return err,
                 };
             },
             .key_press => |k| {
-                handleKey(allocator, vx, &state, k, puzzle_id, today, &storage.db) catch |err| switch (err) {
+                handleKey(allocator, vx, &state, k, puzzle_id, today, &storage.db, deps.save_result) catch |err| switch (err) {
                     error.Quit => return .quit,
                     error.BackToMenu => return .back_to_menu,
                     else => return err,
@@ -191,6 +213,44 @@ pub fn run(
             },
         }
     }
+}
+
+fn defaultFetchDailyPuzzle(
+    allocator: std.mem.Allocator,
+    puzzle_date: []const u8,
+) anyerror!std.json.Parsed(api_models.ConnectionsData) {
+    return api_client.fetchConnections(allocator, puzzle_date);
+}
+
+fn defaultSaveResult(db: *sqlite.Db, result: storage_stats.ConnectionsResult) anyerror!void {
+    return storage_stats.saveConnectionsResult(db, result);
+}
+
+fn showLoadError(
+    allocator: std.mem.Allocator,
+    tty: *vaxis.Tty,
+    vx: *vaxis.Vaxis,
+    loop: *vaxis.Loop(app_event.Event),
+    direct_launch: bool,
+    title: []const u8,
+    err: anyerror,
+) !Exit {
+    const detail = try std.fmt.allocPrint(
+        allocator,
+        "Could not load puzzle ({s}). Check network and try again.",
+        .{@errorName(err)},
+    );
+    defer allocator.free(detail);
+
+    return switch (try fetch_error.run(allocator, tty, vx, loop, .{
+        .title = title,
+        .headline = "Unable to load today's puzzle",
+        .detail = detail,
+        .direct_launch = direct_launch,
+    })) {
+        .quit => .quit,
+        .back_to_menu => .back_to_menu,
+    };
 }
 
 const InputExit = error{ Quit, BackToMenu };
@@ -203,6 +263,7 @@ fn handleKey(
     puzzle_id: i32,
     today: []const u8,
     db: *sqlite.Db,
+    save_result: *const fn (db: *sqlite.Db, result: storage_stats.ConnectionsResult) anyerror!void,
 ) !void {
     if (ui_keys.isCtrlC(k)) return InputExit.Quit;
     if (k.matches(vaxis.Key.escape, .{})) return InputExit.BackToMenu;
@@ -269,7 +330,7 @@ fn handleKey(
     if (isEnterKey(k)) {
         state.hover = .none;
         vx.setMouseShape(.default);
-        try submit(allocator, state, puzzle_id, today, db);
+        try submit(allocator, state, puzzle_id, today, db, save_result);
         return;
     }
 }
@@ -282,6 +343,7 @@ fn handleMouse(
     puzzle_id: i32,
     today: []const u8,
     db: *sqlite.Db,
+    save_result: *const fn (db: *sqlite.Db, result: storage_stats.ConnectionsResult) anyerror!void,
 ) !void {
     if (state.phase == .finished) {
         if (m.type == .press and m.button == .left) return InputExit.BackToMenu;
@@ -309,13 +371,20 @@ fn handleMouse(
                     clampFocus(state);
                 },
                 .deselect => deselectAll(state),
-                .submit => try submit(allocator, state, puzzle_id, today, db),
+                .submit => try submit(allocator, state, puzzle_id, today, db, save_result),
             },
         }
     }
 }
 
-fn submit(allocator: std.mem.Allocator, state: *GameState, puzzle_id: i32, today: []const u8, db: *sqlite.Db) !void {
+fn submit(
+    allocator: std.mem.Allocator,
+    state: *GameState,
+    puzzle_id: i32,
+    today: []const u8,
+    db: *sqlite.Db,
+    save_result: *const fn (db: *sqlite.Db, result: storage_stats.ConnectionsResult) anyerror!void,
+) !void {
     if (state.selected_count < 4) {
         state.prompt_msg.set("Select 4");
         return;
@@ -351,7 +420,7 @@ fn submit(allocator: std.mem.Allocator, state: *GameState, puzzle_id: i32, today
             if (state.solved_count == 4) {
                 state.phase = .finished;
                 state.won = true;
-                try storage_stats.saveConnectionsResult(db, .{
+                try save_result(db, .{
                     .puzzle_date = today,
                     .puzzle_id = puzzle_id,
                     .won = true,
@@ -379,7 +448,7 @@ fn submit(allocator: std.mem.Allocator, state: *GameState, puzzle_id: i32, today
             try std.fmt.allocPrint(allocator, "Out of mistakes  ({d}/{d} solved)", .{ state.solved_count, 4 }),
             allocator,
         );
-        try storage_stats.saveConnectionsResult(db, .{
+        try save_result(db, .{
             .puzzle_date = today,
             .puzzle_id = puzzle_id,
             .won = false,
@@ -460,7 +529,7 @@ fn isEnterKey(k: vaxis.Key) bool {
 fn initFromApi(
     allocator: std.mem.Allocator,
     state: *GameState,
-    data: @import("../../api/models.zig").ConnectionsData,
+    data: api_models.ConnectionsData,
 ) !void {
     if (data.categories.len != 4) return error.InvalidConnectionsPuzzle;
     // NYT orders these from easiest to hardest.

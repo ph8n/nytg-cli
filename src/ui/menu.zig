@@ -34,6 +34,12 @@ const game_options = [_]GameOption{
     .{ .label = "Connections", .choice = .connections },
 };
 
+const GameInfoCacheEntry = struct {
+    valid: bool = false,
+    text: [128]u8 = undefined,
+    len: usize = 0,
+};
+
 pub fn run(
     allocator: std.mem.Allocator,
     tty: *vaxis.Tty,
@@ -44,8 +50,18 @@ pub fn run(
 ) !Choice {
     var selected_action: Action = .play;
     var selected_game: usize = 0;
+    var cache_day = try date.todayLocal();
+    var info_cache = [_]GameInfoCacheEntry{.{}} ** game_options.len;
 
     while (true) {
+        const today_date = try date.todayLocal();
+        if (!isSameDate(today_date, cache_day)) {
+            cache_day = today_date;
+            for (info_cache[0..]) |*entry| {
+                entry.valid = false;
+            }
+        }
+
         const win = vx.window();
         win.clear();
         win.hideCursor();
@@ -57,8 +73,23 @@ pub fn run(
 
         const hint = "Left/Right h/l: game  •  Up/Down j/k: action  •  Enter/Space  •  Ctrl+C";
 
-        var info_buf: [128]u8 = undefined;
-        const info = try formatGameInfo(&info_buf, storage, dev_mode, game_options[selected_game].choice);
+        var today_buf: date.YyyyMmDd = undefined;
+        date.formatYYYYMMDD(&today_buf, cache_day);
+        const today = today_buf[0..];
+
+        const info_entry = &info_cache[selected_game];
+        if (!info_entry.valid) {
+            info_entry.len = try formatGameInfo(
+                info_entry.text[0..],
+                storage,
+                dev_mode,
+                game_options[selected_game].choice,
+                cache_day,
+                today,
+            );
+            info_entry.valid = true;
+        }
+        const info = info_entry.text[0..info_entry.len];
 
         const block_h: u16 = 6; // title + keymap + info + gap + 2 options
         const block_y: u16 = if (win.height > block_h) @intCast((win.height - block_h) / 2) else 0;
@@ -126,12 +157,14 @@ fn makeBigTitle(buf: []u8, title: []const u8) []const u8 {
     return buf[0..i];
 }
 
-fn formatGameInfo(buf: []u8, storage: *storage_db.Storage, dev_mode: bool, game: Choice) ![]const u8 {
-    const today_date = try date.todayLocal();
-    var today_buf: date.YyyyMmDd = undefined;
-    date.formatYYYYMMDD(&today_buf, today_date);
-    const today = today_buf[0..];
-
+fn formatGameInfo(
+    buf: []u8,
+    storage: *storage_db.Storage,
+    dev_mode: bool,
+    game: Choice,
+    today_date: date.Date,
+    today: []const u8,
+) !usize {
     switch (game) {
         .wordle => {
             const status: storage_stats.PlayedStatus = if (dev_mode) .not_played else try storage_stats.getWordlePlayedStatus(&storage.db, today);
@@ -141,7 +174,7 @@ fn formatGameInfo(buf: []u8, storage: *storage_db.Storage, dev_mode: bool, game:
                 .lost => "X",
                 .not_played => "-",
             };
-            return std.fmt.bufPrint(buf, "Today: {s}  •  Streak: {d}", .{ mark, streak }) catch unreachable;
+            return (std.fmt.bufPrint(buf, "Today: {s}  •  Streak: {d}", .{ mark, streak }) catch unreachable).len;
         },
         .connections => {
             const status: storage_stats.PlayedStatus = if (dev_mode) .not_played else try storage_stats.getConnectionsPlayedStatus(&storage.db, today);
@@ -151,7 +184,7 @@ fn formatGameInfo(buf: []u8, storage: *storage_db.Storage, dev_mode: bool, game:
                 .lost => "X",
                 .not_played => "-",
             };
-            return std.fmt.bufPrint(buf, "Today: {s}  •  Streak: {d}", .{ mark, streak }) catch unreachable;
+            return (std.fmt.bufPrint(buf, "Today: {s}  •  Streak: {d}", .{ mark, streak }) catch unreachable).len;
         },
         .wordle_unlimited => {
             const streak: u32 = if (dev_mode) 0 else try storage_stats.getWordleUnlimitedStreak(&storage.db);
@@ -165,10 +198,14 @@ fn formatGameInfo(buf: []u8, storage: *storage_db.Storage, dev_mode: bool, game:
                     .{},
                 );
             const mark: []const u8 = if (last_won) |won| if (won != 0) "✓" else "X" else "-";
-            return std.fmt.bufPrint(buf, "Last: {s}  •  Streak: {d}", .{ mark, streak }) catch unreachable;
+            return (std.fmt.bufPrint(buf, "Last: {s}  •  Streak: {d}", .{ mark, streak }) catch unreachable).len;
         },
         else => unreachable,
     }
+}
+
+fn isSameDate(a: date.Date, b: date.Date) bool {
+    return a.year == b.year and a.month == b.month and a.day == b.day;
 }
 
 fn printCentered(win: vaxis.Window, row: u16, text: []const u8, style: vaxis.Style) void {

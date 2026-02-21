@@ -3,6 +3,16 @@ const sqlite = @import("sqlite");
 
 const date = @import("../utils/date.zig");
 
+var stats_revision = std.atomic.Value(u64).init(1);
+
+pub fn getStatsRevision() u64 {
+    return stats_revision.load(.monotonic);
+}
+
+fn bumpStatsRevision() void {
+    _ = stats_revision.fetchAdd(1, .monotonic);
+}
+
 pub const WordleResult = struct {
     puzzle_date: []const u8, // YYYY-MM-DD (local date)
     puzzle_id: i32,
@@ -120,6 +130,7 @@ pub fn saveConnectionsResult(db: *sqlite.Db, result: ConnectionsResult) !void {
         @as(i32, result.mistakes),
         result.played_at,
     });
+    bumpStatsRevision();
 }
 
 pub fn getConnectionsDailyStreak(db: *sqlite.Db, today: date.Date) !u32 {
@@ -218,6 +229,7 @@ pub fn saveWordleResult(db: *sqlite.Db, result: WordleResult) !void {
         @as(i32, result.guesses),
         result.played_at,
     });
+    bumpStatsRevision();
 }
 
 pub const WordleUnlimitedResult = struct {
@@ -235,6 +247,7 @@ pub fn saveWordleUnlimitedResult(db: *sqlite.Db, result: WordleUnlimitedResult) 
         @as(i32, result.guesses),
         result.played_at,
     });
+    bumpStatsRevision();
 }
 
 pub fn getWordleUnlimitedStreak(db: *sqlite.Db) !u32 {

@@ -166,6 +166,14 @@ const QuickStats = struct {
     global: GlobalActivity,
 };
 
+const QuickStatsSnapshot = struct {
+    revision: u64,
+    today: date.Date,
+    stats: QuickStats,
+};
+
+var quick_stats_snapshot: ?QuickStatsSnapshot = null;
+
 fn runWordle(
     allocator: std.mem.Allocator,
     tty: *vaxis.Tty,
@@ -177,7 +185,7 @@ fn runWordle(
     var view_year: std.time.epoch.Year = today_date.year;
     var view_month: u8 = today_date.month;
 
-    const quick = try computeAllQuickStats(allocator, storage, today_date);
+    const quick = try getQuickStatsCached(allocator, storage, today_date);
 
     var first_played: ?YearMonth = null;
     if (try storage_stats.getWordleFirstPlayedDateAlloc(allocator, &storage.db)) |min_date| {
@@ -246,7 +254,7 @@ fn runConnections(
     var view_year: std.time.epoch.Year = today_date.year;
     var view_month: u8 = today_date.month;
 
-    const quick = try computeAllQuickStats(allocator, storage, today_date);
+    const quick = try getQuickStatsCached(allocator, storage, today_date);
 
     var first_played: ?YearMonth = null;
     if (try storage_stats.getConnectionsFirstPlayedDateAlloc(allocator, &storage.db)) |min_date| {
@@ -310,7 +318,7 @@ fn runWordleUnlimited(
     storage: *storage_db.Storage,
 ) !Exit {
     const today_date = try date.todayLocal();
-    const quick = try computeAllQuickStats(allocator, storage, today_date);
+    const quick = try getQuickStatsCached(allocator, storage, today_date);
 
     while (true) {
         var frame_arena = std.heap.ArenaAllocator.init(allocator);
@@ -1062,6 +1070,31 @@ fn computeAllQuickStats(allocator: std.mem.Allocator, storage: *storage_db.Stora
         .unlimited = unlimited,
         .global = global,
     };
+}
+
+fn getQuickStatsCached(
+    allocator: std.mem.Allocator,
+    storage: *storage_db.Storage,
+    today_date: date.Date,
+) !QuickStats {
+    const revision = storage_stats.getStatsRevision();
+    if (quick_stats_snapshot) |snapshot| {
+        if (snapshot.revision == revision and sameDate(snapshot.today, today_date)) {
+            return snapshot.stats;
+        }
+    }
+
+    const computed = try computeAllQuickStats(allocator, storage, today_date);
+    quick_stats_snapshot = .{
+        .revision = revision,
+        .today = today_date,
+        .stats = computed,
+    };
+    return computed;
+}
+
+fn sameDate(a: date.Date, b: date.Date) bool {
+    return a.year == b.year and a.month == b.month and a.day == b.day;
 }
 
 fn localHourWday(ts: i64) ?struct { hour: u8, wday: u8 } {

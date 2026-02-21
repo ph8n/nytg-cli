@@ -7,6 +7,7 @@ const menu = @import("ui/menu.zig");
 const stats = @import("ui/stats.zig");
 const connections = @import("games/connections/connections.zig");
 const wordle = @import("games/wordle/wordle.zig");
+const api_client = @import("api/client.zig");
 const storage_db = @import("storage/db.zig");
 const option = @import("option.zig");
 
@@ -32,6 +33,9 @@ pub const App = struct {
     }
 
     fn runUi(allocator: std.mem.Allocator, cli: option.Cli) !u8 {
+        try api_client.globalInit();
+        defer api_client.globalDeinit();
+
         var buffer: [1024]u8 = undefined;
         var tty = try vaxis.Tty.init(&buffer);
         defer tty.deinit();
