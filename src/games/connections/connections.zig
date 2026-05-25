@@ -114,6 +114,7 @@ const GameState = struct {
     solved_count: u8 = 0,
 
     guessed: std.AutoHashMapUnmanaged(u32, void) = .{},
+    rng: std.Random.DefaultPrng = undefined,
 
     prompt_msg: StatusMessage = .{},
     last_msg: StatusMessage = .{},
@@ -152,6 +153,7 @@ pub fn runWithDeps(
     deps: Dependencies,
 ) !Exit {
     var state: GameState = .{};
+    state.rng = std.Random.DefaultPrng.init(seedFromTime());
     defer state.deinit(allocator);
 
     const today_date = try date.todayLocal();
@@ -588,9 +590,7 @@ fn seedFromTime() u64 {
 
 fn shuffleBoard(state: *GameState) void {
     if (state.board_len <= 1) return;
-    var prng = std.Random.DefaultPrng.init(seedFromTime());
-    const random = prng.random();
-    random.shuffle(CardId, state.board[0..state.board_len]);
+    state.rng.random().shuffle(CardId, state.board[0..state.board_len]);
 }
 
 fn deselectAll(state: *GameState) void {

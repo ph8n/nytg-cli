@@ -2,10 +2,9 @@ const std = @import("std");
 const App = @import("app.zig").App;
 
 pub fn main() void {
-    const code: u8 = blk: {
-        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-        defer _ = gpa.deinit();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
+    const code: u8 = blk: {
         var app = App.init(gpa.allocator()) catch break :blk 1;
         defer app.deinit();
 
@@ -16,6 +15,11 @@ pub fn main() void {
 
         break :blk code;
     };
+
+    if (gpa.deinit() == .leak) {
+        std.debug.print("error: memory leak detected\n", .{});
+        std.process.exit(1);
+    }
 
     std.process.exit(code);
 }

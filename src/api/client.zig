@@ -5,6 +5,7 @@ const models = @import("models.zig");
 const storage_db = @import("../storage/db.zig");
 
 pub const Error = error{
+    ApiClientNotInitialized,
     UnexpectedStatusCode,
 };
 
@@ -50,7 +51,7 @@ fn fetchPuzzle(
     kind: PuzzleKind,
     date: []const u8,
 ) !std.json.Parsed(T) {
-    try globalInit();
+    if (!curl_initialized) return error.ApiClientNotInitialized;
 
     const url = try buildUrl(allocator, kind, date);
     defer allocator.free(url);

@@ -69,6 +69,7 @@ pub fn runWithDeps(
     defer allowed.deinit(allocator);
 
     var state: GameState = .{};
+    var prng = std.Random.DefaultPrng.init(seedFromTime());
 
     var status_msg: StatusMessage = .{};
     defer status_msg.clear();
@@ -105,7 +106,7 @@ pub fn runWithDeps(
         state.solution = try normalizeSolution(parsed.value.solution);
         puzzle_id = parsed.value.id;
     } else {
-        state.solution = try pickRandomSolution();
+        state.solution = try pickRandomSolution(prng.random());
     }
 
     while (true) {
@@ -127,7 +128,7 @@ pub fn runWithDeps(
                         if (mode == .unlimited) {
                             status_msg.clear();
                             state = .{};
-                            state.solution = try pickRandomSolution();
+                            state.solution = try pickRandomSolution(prng.random());
                             continue;
                         }
                         return .back_to_menu;
@@ -308,40 +309,13 @@ fn normalizeSolution(s: []const u8) ![5]u8 {
     return out;
 }
 
-fn pickRandomSolution() ![5]u8 {
-    var prng = std.Random.DefaultPrng.init(seedFromTime());
-    const random = prng.random();
-
+fn pickRandomSolution(random: std.Random) ![5]u8 {
     const data = @embedFile("../../data/solutions.txt");
-    var it = std.mem.splitScalar(u8, data, '\n');
+    const count = fixedWordCount(data) orelse return error.NoSolutions;
+    if (count == 0) return error.NoSolutions;
 
-    var chosen: ?[5]u8 = null;
-    var seen: u32 = 0;
-    while (it.next()) |raw| {
-        const line = std.mem.trimRight(u8, raw, "\r");
-        if (line.len != 5) continue;
-
-        var sol: [5]u8 = undefined;
-        var ok = true;
-        for (line, 0..) |c, i| {
-            if (!std.ascii.isAlphabetic(c)) {
-                ok = false;
-                break;
-            }
-            sol[i] = std.ascii.toLower(c);
-        }
-        if (!ok) continue;
-
-        seen += 1;
-        if (seen == 1) {
-            chosen = sol;
-            continue;
-        }
-        if (random.uintLessThan(u32, seen) == 0) {
-            chosen = sol;
-        }
-    }
-    return chosen orelse error.NoSolutions;
+    const idx = random.uintLessThan(usize, count);
+    return normalizeSolution(fixedWordAt(data, idx));
 }
 
 fn seedFromTime() u64 {
@@ -421,38 +395,53 @@ fn evaluateGuess(guess: []const u8, solution: []const u8) [5]Status {
 }
 
 const AllowedWords = struct {
-    set: std.StringHashMapUnmanaged(void) = .{},
-
     fn init(allocator: std.mem.Allocator) !AllowedWords {
-        var self: AllowedWords = .{};
-        try self.loadEmbedded(allocator);
-        return self;
+        _ = allocator;
+        return .{};
     }
 
     fn deinit(self: *AllowedWords, allocator: std.mem.Allocator) void {
-        self.set.deinit(allocator);
+        _ = allocator;
         self.* = undefined;
     }
 
     fn contains(self: *const AllowedWords, lower: []const u8) bool {
-        return self.set.contains(lower);
-    }
-
-    fn loadEmbedded(self: *AllowedWords, allocator: std.mem.Allocator) !void {
-        try loadList(self, allocator, @embedFile("../../data/valid_guesses.txt"));
-        try loadList(self, allocator, @embedFile("../../data/solutions.txt"));
-    }
-
-    fn loadList(self: *AllowedWords, allocator: std.mem.Allocator, data: []const u8) !void {
-        var it = std.mem.splitScalar(u8, data, '\n');
-        while (it.next()) |raw| {
-            const line = std.mem.trimRight(u8, raw, "\r");
-            if (line.len == 0) continue;
-            if (line.len != 5) continue;
-            try self.set.put(allocator, line, {});
-        }
+        _ = self;
+        return containsFixedSortedWord(@embedFile("../../data/valid_guesses.txt"), lower) or
+            containsFixedSortedWord(@embedFile("../../data/solutions.txt"), lower);
     }
 };
+
+const fixed_word_len = 5;
+const fixed_word_stride = fixed_word_len + 1;
+
+fn fixedWordCount(data: []const u8) ?usize {
+    if (data.len == 0 or data.len % fixed_word_stride != 0) return null;
+    return data.len / fixed_word_stride;
+}
+
+fn fixedWordAt(data: []const u8, idx: usize) []const u8 {
+    const start = idx * fixed_word_stride;
+    return data[start .. start + fixed_word_len];
+}
+
+fn containsFixedSortedWord(data: []const u8, word: []const u8) bool {
+    if (word.len != fixed_word_len) return false;
+    const count = fixedWordCount(data) orelse return false;
+
+    var lo: usize = 0;
+    var hi: usize = count;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        const candidate = fixedWordAt(data, mid);
+        switch (std.mem.order(u8, word, candidate)) {
+            .eq => return true,
+            .lt => hi = mid,
+            .gt => lo = mid + 1,
+        }
+    }
+    return false;
+}
 
 fn render(vx: *vaxis.Vaxis, state: *GameState, msg: *StatusMessage, direct_launch: bool, mode: Mode) !void {
     const win = vx.window();

@@ -384,7 +384,7 @@ fn renderWordleUnlimitedRecent(
     const col_w: u16 = 1;
     const plot_w: u16 = plot.width - axis_w;
     const max_cols: u16 = plot_w / col_w;
-    const games_to_draw: u16 = @min(@as(u16, @intCast(games.len)), @min(@as(u16, 100), max_cols));
+    const games_to_draw: u16 = @intCast(@min(games.len, @min(@as(usize, 100), @as(usize, max_cols))));
     const start_index: usize = games.len - @as(usize, @intCast(games_to_draw));
 
     const bars_w: u16 = games_to_draw * col_w;
@@ -435,7 +435,7 @@ fn renderWordleUnlimitedRecent(
             const g = games[start_index + @as(usize, @intCast(i))];
             const x: u16 = bars_x0 + @as(u16, @intCast(i)) * col_w;
             const won = g.won != 0;
-            const guesses: u8 = @intCast(@max(@as(i64, 0), g.guesses));
+            const guesses = clampI64ToU8(g.guesses, 0, 6);
             const height: u8 = if (won) @min(@as(u8, 6), guesses) else 7;
             const color = if (won) colors.wordle.correct else vaxis.Color{ .rgb = .{ 220, 20, 60 } };
             const style: vaxis.Style = .{ .fg = color, .bold = true };
@@ -490,7 +490,7 @@ fn renderWordleUnlimitedRecent(
         const won = g.won != 0;
         if (won) {
             wins += 1;
-            const guesses: u8 = @intCast(@max(@as(i64, 1), g.guesses));
+            const guesses = clampI64ToU8(g.guesses, 1, 6);
             if (guesses >= 1 and guesses <= 6) wins_by_guess[guesses - 1] += 1;
         } else {
             losses += 1;
@@ -704,7 +704,7 @@ fn computeWordleAllTime(
         const won = r.won != 0;
         if (won) {
             stats.won += 1;
-            const guesses: u8 = @intCast(@max(@as(i64, 1), r.guesses));
+            const guesses = clampI64ToU8(r.guesses, 1, 6);
             if (guesses >= 1 and guesses <= 6) {
                 stats.dist[guesses - 1] += 1;
                 wins_by_guess[guesses - 1] += 1;
@@ -737,7 +737,7 @@ fn computeWordleAllTime(
         gop.value_ptr.played += 1;
         if (won) {
             gop.value_ptr.won += 1;
-            gop.value_ptr.sum_wins += @intCast(@max(@as(i64, 0), r.guesses));
+            gop.value_ptr.sum_wins += clampI64ToU8(r.guesses, 1, 6);
             gop.value_ptr.wins_count += 1;
         } else {
             gop.value_ptr.lost += 1;
@@ -812,8 +812,7 @@ fn computeConnectionsAllTime(
         const won = r.won != 0;
         if (won) {
             stats.won += 1;
-            const mistakes: u8 = @intCast(@max(@as(i64, 0), r.mistakes));
-            const m_clamped: u8 = @min(@as(u8, 3), mistakes);
+            const m_clamped = clampI64ToU8(r.mistakes, 0, 3);
             stats.dist[m_clamped] += 1;
             wins_by_mistakes[m_clamped] += 1;
             sum_mistakes += m_clamped;
@@ -845,7 +844,7 @@ fn computeConnectionsAllTime(
         gop.value_ptr.played += 1;
         if (won) {
             gop.value_ptr.won += 1;
-            gop.value_ptr.sum_wins += @intCast(@max(@as(i64, 0), r.mistakes));
+            gop.value_ptr.sum_wins += clampI64ToU8(r.mistakes, 0, 3);
             gop.value_ptr.wins_count += 1;
         } else {
             gop.value_ptr.lost += 1;
@@ -922,7 +921,7 @@ fn computeUnlimitedAllTime(
             cur_streak += 1;
             best_streak = @max(best_streak, cur_streak);
 
-            const guesses: u8 = @intCast(@max(@as(i64, 1), r.guesses));
+            const guesses = clampI64ToU8(r.guesses, 1, 6);
             if (guesses >= 1 and guesses <= 6) {
                 stats.dist[guesses - 1] += 1;
                 wins_by_guess[guesses - 1] += 1;
@@ -1136,6 +1135,12 @@ fn percent(numer: u32, denom: u32) u32 {
     return @intCast((@as(u64, numer) * 100 + @as(u64, denom) / 2) / @as(u64, denom));
 }
 
+fn clampI64ToU8(value: i64, min: u8, max: u8) u8 {
+    if (value <= @as(i64, min)) return min;
+    if (value >= @as(i64, max)) return max;
+    return @intCast(value);
+}
+
 fn avgTimes100(sum: u64, count: u32) u32 {
     if (count == 0) return 0;
     return @intCast((sum * 100 + @as(u64, count) / 2) / @as(u64, count));
@@ -1232,8 +1237,7 @@ fn computeWindowSummary(rows: []const storage_stats.WordleUnlimitedGameFullRow) 
     for (rows) |r| {
         if (r.won != 0) {
             s.won += 1;
-            const guesses_i64 = @max(@as(i64, 1), r.guesses);
-            const guesses_u8: u8 = @intCast(@min(@as(i64, 6), guesses_i64));
+            const guesses_u8 = clampI64ToU8(r.guesses, 1, 6);
             sum_wins += @as(u64, guesses_u8);
         } else {
             s.lost += 1;
@@ -1779,7 +1783,7 @@ fn ensureCache(
     for (rows) |r| {
         const day = parseDayFromYyyyMmDd(r.puzzle_date.data) orelse continue;
         if (day == 0 or day > days_in_month) continue;
-        games[day - 1] = .{ .won = r.won != 0, .guesses = @intCast(r.guesses) };
+        games[day - 1] = .{ .won = r.won != 0, .guesses = clampI64ToU8(r.guesses, 0, 6) };
     }
 
     cache.* = .{
@@ -1816,7 +1820,7 @@ fn ensureConnectionsCache(
     for (rows) |r| {
         const day = parseDayFromYyyyMmDd(r.puzzle_date.data) orelse continue;
         if (day == 0 or day > days_in_month) continue;
-        games[day - 1] = .{ .won = r.won != 0, .mistakes = @intCast(r.mistakes) };
+        games[day - 1] = .{ .won = r.won != 0, .mistakes = clampI64ToU8(r.mistakes, 0, 4) };
     }
 
     cache.* = .{

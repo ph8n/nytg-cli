@@ -76,7 +76,7 @@ fn configureDb(db: *sqlite.Db) !void {
     _ = try db.pragma(i64, .{}, "busy_timeout", "5000");
 }
 
-const LatestSchemaVersion: i64 = 2;
+const LatestSchemaVersion: i64 = 3;
 
 fn migrate(db: *sqlite.Db) !void {
     var version = (try db.pragma(i64, .{}, "user_version", null)) orelse 0;
@@ -93,6 +93,11 @@ fn migrate(db: *sqlite.Db) !void {
         _ = try db.pragma(void, .{}, "user_version", "2");
         version = 2;
     }
+
+    if (version < 3) {
+        try migrateToV3(db);
+        _ = try db.pragma(void, .{}, "user_version", "3");
+    }
 }
 
 fn migrateToV1(db: *sqlite.Db) !void {
@@ -102,8 +107,8 @@ fn migrateToV1(db: *sqlite.Db) !void {
         \\  id INTEGER PRIMARY KEY,
         \\  puzzle_date TEXT NOT NULL UNIQUE,
         \\  puzzle_id INTEGER NOT NULL,
-        \\  won INTEGER NOT NULL,
-        \\  guesses INTEGER NOT NULL,
+        \\  won INTEGER NOT NULL CHECK (won IN (0, 1)),
+        \\  guesses INTEGER NOT NULL CHECK (guesses BETWEEN 0 AND 6),
         \\  played_at INTEGER NOT NULL
         \\)
     , .{}, .{});
@@ -114,8 +119,8 @@ fn migrateToV1(db: *sqlite.Db) !void {
         \\  id INTEGER PRIMARY KEY,
         \\  puzzle_date TEXT NOT NULL UNIQUE,
         \\  puzzle_id INTEGER NOT NULL,
-        \\  won INTEGER NOT NULL,
-        \\  mistakes INTEGER NOT NULL,
+        \\  won INTEGER NOT NULL CHECK (won IN (0, 1)),
+        \\  mistakes INTEGER NOT NULL CHECK (mistakes BETWEEN 0 AND 4),
         \\  played_at INTEGER NOT NULL
         \\)
     , .{}, .{});
@@ -126,10 +131,74 @@ fn migrateToV2(db: *sqlite.Db) !void {
     try db.exec(
         \\CREATE TABLE IF NOT EXISTS wordle_unlimited_games (
         \\  id INTEGER PRIMARY KEY,
-        \\  won INTEGER NOT NULL,
-        \\  guesses INTEGER NOT NULL,
+        \\  won INTEGER NOT NULL CHECK (won IN (0, 1)),
+        \\  guesses INTEGER NOT NULL CHECK (guesses BETWEEN 0 AND 6),
         \\  played_at INTEGER NOT NULL
         \\)
+    , .{}, .{});
+}
+
+fn migrateToV3(db: *sqlite.Db) !void {
+    try db.exec(
+        \\DELETE FROM wordle_games
+        \\WHERE won NOT IN (0, 1) OR guesses < 0 OR guesses > 6
+    , .{}, .{});
+    try db.exec(
+        \\DELETE FROM connections_games
+        \\WHERE won NOT IN (0, 1) OR mistakes < 0 OR mistakes > 4
+    , .{}, .{});
+    try db.exec(
+        \\DELETE FROM wordle_unlimited_games
+        \\WHERE won NOT IN (0, 1) OR guesses < 0 OR guesses > 6
+    , .{}, .{});
+
+    try db.exec(
+        \\CREATE TRIGGER IF NOT EXISTS wordle_games_validate_insert
+        \\BEFORE INSERT ON wordle_games
+        \\WHEN NEW.won NOT IN (0, 1) OR NEW.guesses < 0 OR NEW.guesses > 6
+        \\BEGIN
+        \\  SELECT RAISE(ABORT, 'invalid wordle_games row');
+        \\END
+    , .{}, .{});
+    try db.exec(
+        \\CREATE TRIGGER IF NOT EXISTS wordle_games_validate_update
+        \\BEFORE UPDATE ON wordle_games
+        \\WHEN NEW.won NOT IN (0, 1) OR NEW.guesses < 0 OR NEW.guesses > 6
+        \\BEGIN
+        \\  SELECT RAISE(ABORT, 'invalid wordle_games row');
+        \\END
+    , .{}, .{});
+    try db.exec(
+        \\CREATE TRIGGER IF NOT EXISTS connections_games_validate_insert
+        \\BEFORE INSERT ON connections_games
+        \\WHEN NEW.won NOT IN (0, 1) OR NEW.mistakes < 0 OR NEW.mistakes > 4
+        \\BEGIN
+        \\  SELECT RAISE(ABORT, 'invalid connections_games row');
+        \\END
+    , .{}, .{});
+    try db.exec(
+        \\CREATE TRIGGER IF NOT EXISTS connections_games_validate_update
+        \\BEFORE UPDATE ON connections_games
+        \\WHEN NEW.won NOT IN (0, 1) OR NEW.mistakes < 0 OR NEW.mistakes > 4
+        \\BEGIN
+        \\  SELECT RAISE(ABORT, 'invalid connections_games row');
+        \\END
+    , .{}, .{});
+    try db.exec(
+        \\CREATE TRIGGER IF NOT EXISTS wordle_unlimited_games_validate_insert
+        \\BEFORE INSERT ON wordle_unlimited_games
+        \\WHEN NEW.won NOT IN (0, 1) OR NEW.guesses < 0 OR NEW.guesses > 6
+        \\BEGIN
+        \\  SELECT RAISE(ABORT, 'invalid wordle_unlimited_games row');
+        \\END
+    , .{}, .{});
+    try db.exec(
+        \\CREATE TRIGGER IF NOT EXISTS wordle_unlimited_games_validate_update
+        \\BEFORE UPDATE ON wordle_unlimited_games
+        \\WHEN NEW.won NOT IN (0, 1) OR NEW.guesses < 0 OR NEW.guesses > 6
+        \\BEGIN
+        \\  SELECT RAISE(ABORT, 'invalid wordle_unlimited_games row');
+        \\END
     , .{}, .{});
 }
 
