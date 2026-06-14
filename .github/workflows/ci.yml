@@ -14,5 +14,6 @@ jobs:
         with:
           version: 0.16.0
           cache: false
-      - run: zig build test
-
+      - run: |
+          unset ZIG_GLOBAL_CACHE_DIR
+          zig build test
