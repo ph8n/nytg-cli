@@ -44,6 +44,8 @@ jobs:
           version: 0.16.0
           cache: false
 
+      - run: ./scripts/seed-zig-package-cache.sh
+
       - name: Resolve version
         id: meta
         shell: bash
