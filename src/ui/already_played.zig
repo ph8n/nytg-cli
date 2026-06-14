@@ -59,7 +59,7 @@ pub fn run(
 
         try vx.render(tty.writer());
 
-        switch (loop.nextEvent()) {
+        switch (try loop.nextEvent()) {
             .winsize => |ws| try vx.resize(allocator, tty.writer(), ws),
             .mouse, .mouse_leave => {},
             .key_press => |k| {

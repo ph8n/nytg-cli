@@ -83,7 +83,7 @@ pub fn utcDateFromUnixTimestampSeconds(timestamp_seconds: i64) error{NegativeTim
 }
 
 pub fn todayUtc() error{NegativeTimestamp}!Date {
-    return utcDateFromUnixTimestampSeconds(std.time.timestamp());
+    return utcDateFromUnixTimestampSeconds(try unixTimestampSeconds());
 }
 
 pub fn localDateFromUnixTimestampSeconds(timestamp_seconds: i64) error{NegativeTimestamp}!Date {
@@ -109,7 +109,13 @@ pub fn localDateFromUnixTimestampSeconds(timestamp_seconds: i64) error{NegativeT
 }
 
 pub fn todayLocal() error{NegativeTimestamp}!Date {
-    return localDateFromUnixTimestampSeconds(std.time.timestamp());
+    return localDateFromUnixTimestampSeconds(try unixTimestampSeconds());
+}
+
+pub fn unixTimestampSeconds() error{NegativeTimestamp}!i64 {
+    const t = c.time(null);
+    if (t < 0) return error.NegativeTimestamp;
+    return @intCast(t);
 }
 
 pub fn formatYYYYMMDD(buf: *YyyyMmDd, date: Date) void {

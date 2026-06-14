@@ -19,7 +19,12 @@ pub const Exit = enum {
 };
 
 pub const Dependencies = struct {
-    fetch_daily_puzzle: *const fn (allocator: std.mem.Allocator, puzzle_date: []const u8) anyerror!std.json.Parsed(api_models.ConnectionsData) = defaultFetchDailyPuzzle,
+    fetch_daily_puzzle: *const fn (
+        allocator: std.mem.Allocator,
+        puzzle_date: []const u8,
+        io: std.Io,
+        environ_map: *std.process.Environ.Map,
+    ) anyerror!std.json.Parsed(api_models.ConnectionsData) = defaultFetchDailyPuzzle,
     save_result: *const fn (db: *sqlite.Db, result: storage_stats.ConnectionsResult) anyerror!void = defaultSaveResult,
 };
 
@@ -138,8 +143,10 @@ pub fn run(
     storage: *storage_db.Storage,
     dev_mode: bool,
     direct_launch: bool,
+    io: std.Io,
+    environ_map: *std.process.Environ.Map,
 ) !Exit {
-    return runWithDeps(allocator, tty, vx, loop, storage, dev_mode, direct_launch, .{});
+    return runWithDeps(allocator, tty, vx, loop, storage, dev_mode, direct_launch, io, environ_map, .{});
 }
 
 pub fn runWithDeps(
@@ -150,6 +157,8 @@ pub fn runWithDeps(
     storage: *storage_db.Storage,
     dev_mode: bool,
     direct_launch: bool,
+    io: std.Io,
+    environ_map: *std.process.Environ.Map,
     deps: Dependencies,
 ) !Exit {
     var state: GameState = .{};
@@ -179,7 +188,7 @@ pub fn runWithDeps(
         };
     }
 
-    var parsed = deps.fetch_daily_puzzle(allocator, today) catch |err| {
+    var parsed = deps.fetch_daily_puzzle(allocator, today, io, environ_map) catch |err| {
         return showLoadError(allocator, tty, vx, loop, direct_launch, "Connections", err);
     };
     defer parsed.deinit();
@@ -193,7 +202,7 @@ pub fn runWithDeps(
         try render(vx, &state, direct_launch);
         try vx.render(tty.writer());
 
-        switch (loop.nextEvent()) {
+        switch (try loop.nextEvent()) {
             .winsize => |ws| try vx.resize(allocator, tty.writer(), ws),
             .mouse_leave => {
                 state.hover = .none;
@@ -220,8 +229,10 @@ pub fn runWithDeps(
 fn defaultFetchDailyPuzzle(
     allocator: std.mem.Allocator,
     puzzle_date: []const u8,
+    io: std.Io,
+    environ_map: *std.process.Environ.Map,
 ) anyerror!std.json.Parsed(api_models.ConnectionsData) {
-    return api_client.fetchConnections(allocator, puzzle_date);
+    return api_client.fetchConnections(allocator, puzzle_date, io, environ_map);
 }
 
 fn defaultSaveResult(db: *sqlite.Db, result: storage_stats.ConnectionsResult) anyerror!void {
@@ -427,7 +438,7 @@ fn submit(
                     .puzzle_id = puzzle_id,
                     .won = true,
                     .mistakes = state.mistakes,
-                    .played_at = std.time.timestamp(),
+                    .played_at = try date.unixTimestampSeconds(),
                 });
             }
             return;
@@ -455,7 +466,7 @@ fn submit(
             .puzzle_id = puzzle_id,
             .won = false,
             .mistakes = state.mistakes,
-            .played_at = std.time.timestamp(),
+            .played_at = try date.unixTimestampSeconds(),
         });
     }
 }
@@ -584,8 +595,7 @@ fn initBoard(state: *GameState) void {
 }
 
 fn seedFromTime() u64 {
-    const ns: i128 = std.time.nanoTimestamp();
-    return @truncate(@as(u128, @bitCast(ns)));
+    return @bitCast(date.unixTimestampSeconds() catch 0);
 }
 
 fn shuffleBoard(state: *GameState) void {

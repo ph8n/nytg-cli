@@ -1,11 +1,12 @@
 const std = @import("std");
 const App = @import("app.zig").App;
 
-pub fn main() void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+pub fn main(init: std.process.Init) void {
+    const allocator = init.gpa;
 
     const code: u8 = blk: {
-        var app = App.init(gpa.allocator()) catch break :blk 1;
+        const args = init.minimal.args.toSlice(init.arena.allocator()) catch break :blk 1;
+        var app = App.init(allocator, args, init.io, init.environ_map) catch break :blk 1;
         defer app.deinit();
 
         const code = app.run() catch |err| {
@@ -15,11 +16,6 @@ pub fn main() void {
 
         break :blk code;
     };
-
-    if (gpa.deinit() == .leak) {
-        std.debug.print("error: memory leak detected\n", .{});
-        std.process.exit(1);
-    }
 
     std.process.exit(code);
 }

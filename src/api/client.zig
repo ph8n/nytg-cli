@@ -37,12 +37,22 @@ pub fn globalDeinit() void {
     curl_initialized = false;
 }
 
-pub fn fetchWordle(allocator: std.mem.Allocator, date: []const u8) !std.json.Parsed(models.WordleData) {
-    return fetchPuzzle(models.WordleData, allocator, .wordle, date);
+pub fn fetchWordle(
+    allocator: std.mem.Allocator,
+    date: []const u8,
+    io: std.Io,
+    environ_map: *std.process.Environ.Map,
+) !std.json.Parsed(models.WordleData) {
+    return fetchPuzzle(models.WordleData, allocator, .wordle, date, io, environ_map);
 }
 
-pub fn fetchConnections(allocator: std.mem.Allocator, date: []const u8) !std.json.Parsed(models.ConnectionsData) {
-    return fetchPuzzle(models.ConnectionsData, allocator, .connections, date);
+pub fn fetchConnections(
+    allocator: std.mem.Allocator,
+    date: []const u8,
+    io: std.Io,
+    environ_map: *std.process.Environ.Map,
+) !std.json.Parsed(models.ConnectionsData) {
+    return fetchPuzzle(models.ConnectionsData, allocator, .connections, date, io, environ_map);
 }
 
 fn fetchPuzzle(
@@ -50,20 +60,22 @@ fn fetchPuzzle(
     allocator: std.mem.Allocator,
     kind: PuzzleKind,
     date: []const u8,
+    io: std.Io,
+    environ_map: *std.process.Environ.Map,
 ) !std.json.Parsed(T) {
     if (!curl_initialized) return error.ApiClientNotInitialized;
 
     const url = try buildUrl(allocator, kind, date);
     defer allocator.free(url);
 
-    const network = fetchWithRetry(allocator, url) catch |network_err| {
-        if (try loadCachedPuzzle(T, allocator, kind, date)) |cached| return cached;
+    const network = fetchWithRetry(allocator, url, io) catch |network_err| {
+        if (try loadCachedPuzzle(T, allocator, kind, date, io, environ_map)) |cached| return cached;
         return network_err;
     };
     defer allocator.free(network.body);
 
     if (network.status_code != 200) {
-        if (try loadCachedPuzzle(T, allocator, kind, date)) |cached| return cached;
+        if (try loadCachedPuzzle(T, allocator, kind, date, io, environ_map)) |cached| return cached;
         return error.UnexpectedStatusCode;
     }
 
@@ -71,11 +83,11 @@ fn fetchPuzzle(
         .ignore_unknown_fields = true,
         .allocate = .alloc_always,
     }) catch |parse_err| {
-        if (try loadCachedPuzzle(T, allocator, kind, date)) |cached| return cached;
+        if (try loadCachedPuzzle(T, allocator, kind, date, io, environ_map)) |cached| return cached;
         return parse_err;
     };
 
-    saveCachedPuzzle(allocator, kind, date, network.body) catch {};
+    saveCachedPuzzle(allocator, kind, date, network.body, io, environ_map) catch {};
     return parsed;
 }
 
@@ -94,19 +106,19 @@ fn buildUrl(allocator: std.mem.Allocator, kind: PuzzleKind, date: []const u8) ![
     };
 }
 
-fn fetchWithRetry(allocator: std.mem.Allocator, url: []const u8) !FetchResponse {
+fn fetchWithRetry(allocator: std.mem.Allocator, url: []const u8, io: std.Io) !FetchResponse {
     var attempt: u8 = 0;
     while (attempt <= max_retries) : (attempt += 1) {
-        const response = performFetch(allocator, url) catch |err| {
+        const response = performFetch(allocator, url, io) catch |err| {
             if (attempt == max_retries) return err;
-            sleepBeforeRetry(attempt);
+            try sleepBeforeRetry(attempt, io);
             continue;
         };
 
         if (response.status_code == 200) return response;
         if (attempt < max_retries and isRetryableStatus(response.status_code)) {
             allocator.free(response.body);
-            sleepBeforeRetry(attempt);
+            try sleepBeforeRetry(attempt, io);
             continue;
         }
         return response;
@@ -114,9 +126,9 @@ fn fetchWithRetry(allocator: std.mem.Allocator, url: []const u8) !FetchResponse 
     unreachable;
 }
 
-fn performFetch(allocator: std.mem.Allocator, url: []const u8) !FetchResponse {
-    var ca_bundle = try curl.allocCABundle(allocator);
-    defer ca_bundle.deinit();
+fn performFetch(allocator: std.mem.Allocator, url: []const u8, io: std.Io) !FetchResponse {
+    var ca_bundle = try curl.allocCABundle(allocator, io);
+    defer ca_bundle.deinit(allocator);
 
     var easy = try curl.Easy.init(.{
         .ca_bundle = ca_bundle,
@@ -145,9 +157,9 @@ fn performFetch(allocator: std.mem.Allocator, url: []const u8) !FetchResponse {
     };
 }
 
-fn sleepBeforeRetry(attempt: u8) void {
-    const delay_ms: u64 = 150 * (@as(u64, attempt) + 1);
-    std.Thread.sleep(delay_ms * std.time.ns_per_ms);
+fn sleepBeforeRetry(attempt: u8, io: std.Io) !void {
+    const delay_ms: i64 = 150 * (@as(i64, attempt) + 1);
+    try std.Io.sleep(io, .fromMilliseconds(delay_ms), .awake);
 }
 
 fn isRetryableStatus(status_code: i32) bool {
@@ -162,18 +174,22 @@ fn loadCachedPuzzle(
     allocator: std.mem.Allocator,
     kind: PuzzleKind,
     date: []const u8,
+    io: std.Io,
+    environ_map: *std.process.Environ.Map,
 ) !?std.json.Parsed(T) {
-    const path = try cachePath(allocator, kind, date);
+    const path = try cachePath(allocator, kind, date, environ_map);
     defer allocator.free(path);
 
-    var file = std.fs.openFileAbsolute(path, .{}) catch |err| switch (err) {
+    const file = std.Io.Dir.openFileAbsolute(io, path, .{}) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => return err,
     };
-    defer file.close();
+    defer file.close(io);
 
-    const body = file.readToEndAlloc(allocator, max_cache_file_bytes) catch |err| switch (err) {
-        error.FileTooBig => return null,
+    var read_buffer: [4096]u8 = undefined;
+    var reader = file.reader(io, &read_buffer);
+    const body = reader.interface.allocRemaining(allocator, .limited(max_cache_file_bytes)) catch |err| switch (err) {
+        error.StreamTooLong => return null,
         else => return err,
     };
     defer allocator.free(body);
@@ -189,20 +205,30 @@ fn saveCachedPuzzle(
     kind: PuzzleKind,
     date: []const u8,
     body: []const u8,
+    io: std.Io,
+    environ_map: *std.process.Environ.Map,
 ) !void {
-    const path = try cachePath(allocator, kind, date);
+    const path = try cachePath(allocator, kind, date, environ_map);
     defer allocator.free(path);
 
-    const parent = std.fs.path.dirname(path) orelse return;
-    try std.fs.cwd().makePath(parent);
+    try storage_db.ensureParentDirExists(path, io);
 
-    var file = try std.fs.createFileAbsolute(path, .{ .truncate = true });
-    defer file.close();
-    try file.writeAll(body);
+    const file = try std.Io.Dir.createFileAbsolute(io, path, .{ .truncate = true });
+    defer file.close(io);
+
+    var write_buffer: [4096]u8 = undefined;
+    var writer = file.writer(io, &write_buffer);
+    try writer.interface.writeAll(body);
+    try writer.interface.flush();
 }
 
-fn cachePath(allocator: std.mem.Allocator, kind: PuzzleKind, date: []const u8) ![]u8 {
-    const app_dir = try std.fs.getAppDataDir(allocator, storage_db.AppName);
+fn cachePath(
+    allocator: std.mem.Allocator,
+    kind: PuzzleKind,
+    date: []const u8,
+    environ_map: *std.process.Environ.Map,
+) ![]u8 {
+    const app_dir = try storage_db.getAppDataDir(allocator, storage_db.AppName, environ_map);
     defer allocator.free(app_dir);
 
     const filename = try std.fmt.allocPrint(allocator, "{s}.json", .{date});

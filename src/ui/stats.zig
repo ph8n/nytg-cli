@@ -218,7 +218,7 @@ fn runWordle(
 
         try vx.render(tty.writer());
 
-        switch (loop.nextEvent()) {
+        switch (try loop.nextEvent()) {
             .winsize => |ws| try vx.resize(allocator, tty.writer(), ws),
             .key_press => |k| {
                 if (keys.isCtrlC(k)) return .quit;
@@ -285,7 +285,7 @@ fn runConnections(
 
         try vx.render(tty.writer());
 
-        switch (loop.nextEvent()) {
+        switch (try loop.nextEvent()) {
             .winsize => |ws| try vx.resize(allocator, tty.writer(), ws),
             .key_press => |k| {
                 if (keys.isCtrlC(k)) return .quit;
@@ -341,7 +341,7 @@ fn runWordleUnlimited(
 
         try vx.render(tty.writer());
 
-        switch (loop.nextEvent()) {
+        switch (try loop.nextEvent()) {
             .winsize => |ws| try vx.resize(allocator, tty.writer(), ws),
             .key_press => |k| {
                 if (keys.isCtrlC(k)) return .quit;
@@ -655,7 +655,7 @@ fn runStub(
 
         try vx.render(tty.writer());
 
-        switch (loop.nextEvent()) {
+        switch (try loop.nextEvent()) {
             .winsize => |ws| try vx.resize(allocator, tty.writer(), ws),
             .key_press => |k| {
                 if (keys.isCtrlC(k)) return .quit;

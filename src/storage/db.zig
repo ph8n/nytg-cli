@@ -23,11 +23,16 @@ pub const OpenOptions = struct {
     db_path: ?[]const u8 = null,
 };
 
-pub fn open(allocator: std.mem.Allocator, options: OpenOptions) !Storage {
-    const path = try resolveDbPath(allocator, options);
+pub fn open(
+    allocator: std.mem.Allocator,
+    options: OpenOptions,
+    io: std.Io,
+    environ_map: *std.process.Environ.Map,
+) !Storage {
+    const path = try resolveDbPath(allocator, options, io, environ_map);
     errdefer allocator.free(path);
 
-    try ensureParentDirExists(path);
+    try ensureParentDirExists(path, io);
 
     const path_z = try allocator.dupeZ(u8, path);
     defer allocator.free(path_z);
@@ -48,24 +53,52 @@ pub fn open(allocator: std.mem.Allocator, options: OpenOptions) !Storage {
     };
 }
 
-fn resolveDbPath(allocator: std.mem.Allocator, options: OpenOptions) ![]u8 {
+fn resolveDbPath(
+    allocator: std.mem.Allocator,
+    options: OpenOptions,
+    io: std.Io,
+    environ_map: *std.process.Environ.Map,
+) ![]u8 {
     if (options.db_path) |p| {
         return try allocator.dupe(u8, p);
     }
 
-    const app_dir = try std.fs.getAppDataDir(allocator, AppName);
+    const app_dir = try getAppDataDir(allocator, AppName, environ_map);
     defer allocator.free(app_dir);
 
     // Ensure the per-app directory exists.
     // This may be an absolute path; on POSIX mkdir-at ignores dirfd for absolute paths.
-    try std.fs.cwd().makePath(app_dir);
+    try std.Io.Dir.cwd().createDirPath(io, app_dir);
 
     return try std.fs.path.join(allocator, &.{ app_dir, DbFilename });
 }
 
-fn ensureParentDirExists(path: []const u8) !void {
+pub fn ensureParentDirExists(path: []const u8, io: std.Io) !void {
     const parent = std.fs.path.dirname(path) orelse return;
-    try std.fs.cwd().makePath(parent);
+    try std.Io.Dir.cwd().createDirPath(io, parent);
+}
+
+pub fn getAppDataDir(
+    allocator: std.mem.Allocator,
+    appname: []const u8,
+    environ_map: *std.process.Environ.Map,
+) ![]u8 {
+    const builtin = @import("builtin");
+    return switch (builtin.os.tag) {
+        .macos => blk: {
+            const home = environ_map.get("HOME") orelse return error.AppDataDirUnavailable;
+            break :blk try std.fs.path.join(allocator, &.{ home, "Library", "Application Support", appname });
+        },
+        .linux, .freebsd, .netbsd, .dragonfly, .openbsd, .illumos, .serenity => blk: {
+            if (environ_map.get("XDG_DATA_HOME")) |xdg| {
+                if (xdg.len > 0) break :blk try std.fs.path.join(allocator, &.{ xdg, appname });
+            }
+
+            const home = environ_map.get("HOME") orelse return error.AppDataDirUnavailable;
+            break :blk try std.fs.path.join(allocator, &.{ home, ".local", "share", appname });
+        },
+        else => error.AppDataDirUnavailable,
+    };
 }
 
 fn configureDb(db: *sqlite.Db) !void {

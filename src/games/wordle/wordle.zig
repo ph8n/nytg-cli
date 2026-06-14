@@ -24,7 +24,12 @@ pub const Mode = enum {
 };
 
 pub const Dependencies = struct {
-    fetch_daily_puzzle: *const fn (allocator: std.mem.Allocator, puzzle_date: []const u8) anyerror!std.json.Parsed(api_models.WordleData) = defaultFetchDailyPuzzle,
+    fetch_daily_puzzle: *const fn (
+        allocator: std.mem.Allocator,
+        puzzle_date: []const u8,
+        io: std.Io,
+        environ_map: *std.process.Environ.Map,
+    ) anyerror!std.json.Parsed(api_models.WordleData) = defaultFetchDailyPuzzle,
     save_daily_result: *const fn (db: *sqlite.Db, result: storage_stats.WordleResult) anyerror!void = defaultSaveDailyResult,
     save_unlimited_result: *const fn (db: *sqlite.Db, result: storage_stats.WordleUnlimitedResult) anyerror!void = defaultSaveUnlimitedResult,
 };
@@ -50,8 +55,10 @@ pub fn run(
     mode: Mode,
     dev_mode: bool,
     direct_launch: bool,
+    io: std.Io,
+    environ_map: *std.process.Environ.Map,
 ) !Exit {
-    return runWithDeps(allocator, tty, vx, loop, storage, mode, dev_mode, direct_launch, .{});
+    return runWithDeps(allocator, tty, vx, loop, storage, mode, dev_mode, direct_launch, io, environ_map, .{});
 }
 
 pub fn runWithDeps(
@@ -63,6 +70,8 @@ pub fn runWithDeps(
     mode: Mode,
     dev_mode: bool,
     direct_launch: bool,
+    io: std.Io,
+    environ_map: *std.process.Environ.Map,
     deps: Dependencies,
 ) !Exit {
     var allowed = try AllowedWords.init(allocator);
@@ -98,7 +107,7 @@ pub fn runWithDeps(
             }
         }
 
-        var parsed = deps.fetch_daily_puzzle(allocator, today[0..]) catch |err| {
+        var parsed = deps.fetch_daily_puzzle(allocator, today[0..], io, environ_map) catch |err| {
             return showLoadError(allocator, tty, vx, loop, direct_launch, "Wordle", err);
         };
         defer parsed.deinit();
@@ -113,7 +122,7 @@ pub fn runWithDeps(
         try render(vx, &state, &status_msg, direct_launch, mode);
         try vx.render(tty.writer());
 
-        const ev = loop.nextEvent();
+        const ev = try loop.nextEvent();
         switch (ev) {
             .winsize => |ws| {
                 try vx.resize(allocator, tty.writer(), ws);
@@ -187,13 +196,13 @@ pub fn runWithDeps(
                                 .puzzle_id = puzzle_id,
                                 .won = state.won,
                                 .guesses = if (state.won) @intCast(state.row + 1) else 0,
-                                .played_at = std.time.timestamp(),
+                                .played_at = try date.unixTimestampSeconds(),
                             });
                         } else {
                             try deps.save_unlimited_result(&storage.db, .{
                                 .won = state.won,
                                 .guesses = if (state.won) @intCast(state.row + 1) else 0,
-                                .played_at = std.time.timestamp(),
+                                .played_at = try date.unixTimestampSeconds(),
                             });
                         }
                     }
@@ -218,8 +227,10 @@ pub fn runWithDeps(
 fn defaultFetchDailyPuzzle(
     allocator: std.mem.Allocator,
     puzzle_date: []const u8,
+    io: std.Io,
+    environ_map: *std.process.Environ.Map,
 ) anyerror!std.json.Parsed(api_models.WordleData) {
-    return api_client.fetchWordle(allocator, puzzle_date);
+    return api_client.fetchWordle(allocator, puzzle_date, io, environ_map);
 }
 
 fn defaultSaveDailyResult(db: *sqlite.Db, result: storage_stats.WordleResult) anyerror!void {
@@ -319,8 +330,7 @@ fn pickRandomSolution(random: std.Random) ![5]u8 {
 }
 
 fn seedFromTime() u64 {
-    const ns: i128 = std.time.nanoTimestamp();
-    return @truncate(@as(u128, @bitCast(ns)));
+    return @bitCast(date.unixTimestampSeconds() catch 0);
 }
 
 fn pushLetter(state: *GameState, upper: u8) void {

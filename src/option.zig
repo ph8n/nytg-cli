@@ -12,7 +12,7 @@ pub const StartupAction = union(enum) {
     run: Cli,
 };
 
-pub fn parse(args: []const [:0]u8, version: []const u8) !StartupAction {
+pub fn parse(args: []const [:0]const u8, version: []const u8, io: std.Io) !StartupAction {
     var cli: Cli = .{
         .dev_mode = false,
         .direct_wordle = false,
@@ -26,11 +26,11 @@ pub fn parse(args: []const [:0]u8, version: []const u8) !StartupAction {
     if (args.len >= 2) {
         for (args[1..]) |arg| {
             if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "help")) {
-                try printUsage(args[0]);
+                try printUsage(args[0], io);
                 return .{ .exit = 0 };
             }
             if (std.mem.eql(u8, arg, "--version") or std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "version")) {
-                try printVersion(args[0], version);
+                try printVersion(args[0], version, io);
                 return .{ .exit = 0 };
             }
             if (std.mem.eql(u8, arg, "--dev") or std.mem.eql(u8, arg, "dev")) {
@@ -38,9 +38,11 @@ pub fn parse(args: []const [:0]u8, version: []const u8) !StartupAction {
                 continue;
             }
             if (positional_len >= positional.len) {
-                var stderr_writer = std.fs.File.stderr().writer(&.{});
+                var buffer: [1024]u8 = undefined;
+                var stderr_writer = std.Io.File.stderr().writer(io, &buffer);
+                defer stderr_writer.interface.flush() catch {};
                 try stderr_writer.interface.print("too many arguments\n", .{});
-                try printUsage(args[0]);
+                try printUsage(args[0], io);
                 return .{ .exit = 1 };
             }
             positional[positional_len] = arg;
@@ -54,9 +56,11 @@ pub fn parse(args: []const [:0]u8, version: []const u8) !StartupAction {
             if (positional_len >= 2) {
                 cli.wordle_unlimited = std.mem.eql(u8, positional[1], "unlimited");
                 if (!cli.wordle_unlimited) {
-                    var stderr_writer = std.fs.File.stderr().writer(&.{});
+                    var buffer: [1024]u8 = undefined;
+                    var stderr_writer = std.Io.File.stderr().writer(io, &buffer);
+                    defer stderr_writer.interface.flush() catch {};
                     try stderr_writer.interface.print("unknown option: {s}\n", .{positional[1]});
-                    try printUsage(args[0]);
+                    try printUsage(args[0], io);
                     return .{ .exit = 1 };
                 }
             }
@@ -66,9 +70,11 @@ pub fn parse(args: []const [:0]u8, version: []const u8) !StartupAction {
         } else if (std.mem.eql(u8, positional[0], "connections")) {
             cli.direct_connections = true;
         } else {
-            var stderr_writer = std.fs.File.stderr().writer(&.{});
+            var buffer: [1024]u8 = undefined;
+            var stderr_writer = std.Io.File.stderr().writer(io, &buffer);
+            defer stderr_writer.interface.flush() catch {};
             try stderr_writer.interface.print("unknown command: {s}\n", .{positional[0]});
-            try printUsage(args[0]);
+            try printUsage(args[0], io);
             return .{ .exit = 1 };
         }
     }
@@ -76,15 +82,19 @@ pub fn parse(args: []const [:0]u8, version: []const u8) !StartupAction {
     return .{ .run = cli };
 }
 
-fn printUsage(argv0: []const u8) !void {
-    var stderr_writer = std.fs.File.stderr().writer(&.{});
+fn printUsage(argv0: []const u8, io: std.Io) !void {
+    var buffer: [1024]u8 = undefined;
+    var stderr_writer = std.Io.File.stderr().writer(io, &buffer);
+    defer stderr_writer.interface.flush() catch {};
     try stderr_writer.interface.print(
         \\usage: {s} [--help] [--version] [--dev] [wordle [unlimited] | unlimited | connections]
         \\
     , .{argv0});
 }
 
-fn printVersion(argv0: []const u8, version: []const u8) !void {
-    var stdout_writer = std.fs.File.stdout().writer(&.{});
+fn printVersion(argv0: []const u8, version: []const u8, io: std.Io) !void {
+    var buffer: [1024]u8 = undefined;
+    var stdout_writer = std.Io.File.stdout().writer(io, &buffer);
+    defer stdout_writer.interface.flush() catch {};
     try stdout_writer.interface.print("{s} {s}\n", .{ argv0, version });
 }
